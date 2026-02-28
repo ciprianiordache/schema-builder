@@ -1,4 +1,4 @@
-package schemabuilder
+package schema
 
 type Builder struct {
 	db DB
