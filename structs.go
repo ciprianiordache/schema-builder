@@ -13,7 +13,8 @@ type Column struct {
 type ColumnDef struct {
 	Type       string
 	PrimaryKey bool
-	Auto       bool
+	Auto       bool // SERIAL / AUTO_INCREMENT — integer auto-increment
+	UUID       bool // gen_random_uuid() / UUID() — secure random string PK
 	NotNull    bool
 	Unique     bool
 	Default    string
@@ -38,6 +39,7 @@ type tagInfo struct {
 	Name      string
 	PK        bool
 	Auto      bool
+	UUID      bool
 	NotNull   bool
 	Unique    bool
 	Skip      bool

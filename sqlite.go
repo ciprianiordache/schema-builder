@@ -10,6 +10,14 @@ func (SQLite) Column(c ColumnDef) string {
 		return "INTEGER PRIMARY KEY"
 	}
 
+	// SQLite has no native UUID function — store as TEXT,
+	// application or trigger must set the value.
+	// crud-depot will skip it on INSERT (autoGen=true) so the
+	// caller must supply a default via a trigger or similar.
+	if c.PrimaryKey && c.UUID {
+		return "TEXT PRIMARY KEY"
+	}
+
 	sql := ""
 
 	switch c.Type {
@@ -41,22 +49,17 @@ func (SQLite) Column(c ColumnDef) string {
 	return sql
 }
 
-func (SQLite) SupportsAlterFK() bool {
-	return false
-}
+func (SQLite) SupportsAlterFK() bool { return false }
 
 func (SQLite) ForeignKey(fk ForeignKey) string {
 	sql := fmt.Sprintf(
 		"FOREIGN KEY (%s) REFERENCES %s(%s)",
-		fk.Column,
-		fk.RefTable,
-		fk.RefColumn,
+		fk.Column, fk.RefTable, fk.RefColumn,
 	)
 
 	if fk.OnDelete != "" {
 		sql += " ON DELETE " + fk.OnDelete
 	}
-
 	if fk.OnUpdate != "" {
 		sql += " ON UPDATE " + fk.OnUpdate
 	}
@@ -64,9 +67,6 @@ func (SQLite) ForeignKey(fk ForeignKey) string {
 	return sql
 }
 
-func (SQLite) ForeignKeyExists(
-	db DB,
-	table, constraint string,
-) (bool, error) {
+func (SQLite) ForeignKeyExists(db DB, table, constraint string) (bool, error) {
 	return false, nil
 }

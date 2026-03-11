@@ -32,24 +32,17 @@ func (b *Builder) CreateSchema(models ...any) error {
 
 		for _, col := range cols {
 			defs = append(defs,
-				fmt.Sprintf("%s %s",
-					col.Name,
-					b.d.Column(col.Def),
-				),
+				fmt.Sprintf("%s %s", col.Name, b.d.Column(col.Def)),
 			)
 		}
 
-		// 🔹 SQLite: FK inline
 		if !b.d.SupportsAlterFK() {
 			for _, fk := range fks {
 				defs = append(defs, b.d.ForeignKey(fk))
 			}
 		} else {
 			for _, fk := range fks {
-				foreignKeys = append(foreignKeys, pendingFK{
-					Table: table,
-					FK:    fk,
-				})
+				foreignKeys = append(foreignKeys, pendingFK{Table: table, FK: fk})
 			}
 		}
 
@@ -64,20 +57,14 @@ func (b *Builder) CreateSchema(models ...any) error {
 		}
 	}
 
-	// 🔹 Postgres / MySQL: FK via ALTER
 	if b.d.SupportsAlterFK() {
 		for _, item := range foreignKeys {
 			name := foreignKeyName(item.FK)
 
-			exists, err := b.d.ForeignKeyExists(
-				b.db,
-				item.Table,
-				name,
-			)
+			exists, err := b.d.ForeignKeyExists(b.db, item.Table, name)
 			if err != nil {
 				return err
 			}
-
 			if exists {
 				continue
 			}
@@ -93,6 +80,7 @@ func (b *Builder) CreateSchema(models ...any) error {
 			}
 		}
 	}
+
 	return b.CreateIndexes(allIndexes...)
 }
 
@@ -105,9 +93,7 @@ func (b *Builder) CreateIndexes(indexes ...Index) error {
 
 		sql := fmt.Sprintf(
 			"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s);",
-			unique,
-			index.Name,
-			index.Table,
+			unique, index.Name, index.Table,
 			strings.Join(index.Columns, ", "),
 		)
 
@@ -119,11 +105,7 @@ func (b *Builder) CreateIndexes(indexes ...Index) error {
 }
 
 func foreignKeyName(fk ForeignKey) string {
-	return fmt.Sprintf(
-		"fk_%s_%s",
-		fk.RefTable,
-		fk.Column,
-	)
+	return fmt.Sprintf("fk_%s_%s", fk.RefTable, fk.Column)
 }
 
 func parseModel(model any) (string, []Column, []ForeignKey, []Index) {
@@ -152,15 +134,13 @@ func parseModel(model any) (string, []Column, []ForeignKey, []Index) {
 			Type:       colType,
 			PrimaryKey: info.PK,
 			Auto:       info.Auto,
+			UUID:       info.UUID,
 			NotNull:    info.NotNull,
 			Unique:     info.Unique,
 			Default:    defaultSQL(info.Default, colType),
 		}
 
-		cols = append(cols, Column{
-			Name: info.Name,
-			Def:  colDef,
-		})
+		cols = append(cols, Column{Name: info.Name, Def: colDef})
 
 		if info.RefTable != "" {
 			fks = append(fks, ForeignKey{
@@ -177,7 +157,6 @@ func parseModel(model any) (string, []Column, []ForeignKey, []Index) {
 			if name == "" {
 				name = table + "_" + info.Name + "_idx"
 			}
-
 			indexes = append(indexes, Index{
 				Table:   table,
 				Name:    name,
@@ -204,6 +183,8 @@ func parseTag(tag string) tagInfo {
 			info.PK = true
 		case p == "auto":
 			info.Auto = true
+		case p == "uuid":
+			info.UUID = true
 		case p == "notnull":
 			info.NotNull = true
 		case p == "unique":
@@ -219,20 +200,13 @@ func parseTag(tag string) tagInfo {
 			ref := strings.Trim(strings.TrimPrefix(p, "references:"), "()")
 			r := strings.Split(ref, "(")
 			info.RefTable = r[0]
-
 			if len(r) > 1 {
 				info.RefColumn = strings.TrimSuffix(r[1], ")")
-			} else {
-				info.RefColumn = ""
 			}
 		case strings.HasPrefix(p, "on_delete:"):
-			info.OnDelete = strings.ToUpper(
-				strings.TrimPrefix(p, "on_delete:"),
-			)
+			info.OnDelete = strings.ToUpper(strings.TrimPrefix(p, "on_delete:"))
 		case strings.HasPrefix(p, "on_update:"):
-			info.OnUpdate = strings.ToUpper(
-				strings.TrimPrefix(p, "on_update:"),
-			)
+			info.OnUpdate = strings.ToUpper(strings.TrimPrefix(p, "on_update:"))
 		}
 	}
 
@@ -282,24 +256,18 @@ func snake(s string) string {
 	if s == "" {
 		return ""
 	}
-
 	runes := []rune(s)
 	var out []rune
 
 	for i, r := range runes {
 		if i > 0 {
 			prev := runes[i-1]
-
-			// word boundary:
-			// 1) lower -> upper  (userID)
-			// 2) upper -> upper + next lower (HTTPServer)
 			if unicode.IsUpper(r) &&
 				(unicode.IsLower(prev) ||
 					(i+1 < len(runes) && unicode.IsLower(runes[i+1]))) {
 				out = append(out, '_')
 			}
 		}
-
 		out = append(out, unicode.ToLower(r))
 	}
 
@@ -307,7 +275,6 @@ func snake(s string) string {
 }
 
 func resolveTableName(model any) string {
-
 	if tableName, ok := model.(TableNamer); ok {
 		return tableName.TableName()
 	}
@@ -335,18 +302,12 @@ func ValidateModels(models ...any) error {
 			f := t.Field(i)
 			tag := f.Tag.Get("db")
 			if tag == "" {
-				return fmt.Errorf(
-					"model %s field %s missing db tag",
-					t.Name(), f.Name,
-				)
+				return fmt.Errorf("model %s field %s missing db tag", t.Name(), f.Name)
 			}
 
 			info := parseTag(tag)
 			if info.RefTable != "" && info.RefColumn == "" {
-				return fmt.Errorf(
-					"invalid reference in %s.%s",
-					t.Name(), f.Name,
-				)
+				return fmt.Errorf("invalid reference in %s.%s", t.Name(), f.Name)
 			}
 		}
 	}
