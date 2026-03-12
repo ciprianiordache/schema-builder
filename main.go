@@ -13,6 +13,9 @@ func New(db DB, d Dialect) *Builder {
 	return &Builder{db: db, d: d}
 }
 
+// CreateSchema creates tables for all provided models.
+// Tables are created in the order they are provided — put models
+// with no foreign key dependencies first.
 func (b *Builder) CreateSchema(models ...any) error {
 	type pendingFK struct {
 		Table string
@@ -25,11 +28,17 @@ func (b *Builder) CreateSchema(models ...any) error {
 	)
 
 	for _, model := range models {
+		if err := validateModel(model); err != nil {
+			return err
+		}
+
 		table, cols, fks, indexes := parseModel(model)
+
+		// track order for DropSchema
+		b.tables = append(b.tables, table)
 		allIndexes = append(allIndexes, indexes...)
 
 		defs := make([]string, 0, len(cols)+len(fks))
-
 		for _, col := range cols {
 			defs = append(defs,
 				fmt.Sprintf("%s %s", col.Name, b.d.Column(col.Def)),
@@ -46,37 +55,38 @@ func (b *Builder) CreateSchema(models ...any) error {
 			}
 		}
 
-		sql := fmt.Sprintf(
+		query := fmt.Sprintf(
 			"CREATE TABLE IF NOT EXISTS %s (%s);",
 			table,
 			strings.Join(defs, ", "),
 		)
 
-		if _, err := b.db.Exec(sql); err != nil {
-			return err
+		if _, err := b.db.Exec(query); err != nil {
+			return fmt.Errorf("schema: create table %q: %w", table, err)
 		}
 	}
 
+	// Postgres / MySQL: add FKs via ALTER after all tables exist
 	if b.d.SupportsAlterFK() {
 		for _, item := range foreignKeys {
 			name := foreignKeyName(item.FK)
 
 			exists, err := b.d.ForeignKeyExists(b.db, item.Table, name)
 			if err != nil {
-				return err
+				return fmt.Errorf("schema: check FK %q on %q: %w", name, item.Table, err)
 			}
 			if exists {
 				continue
 			}
 
-			sql := fmt.Sprintf(
+			query := fmt.Sprintf(
 				"ALTER TABLE %s ADD %s;",
 				item.Table,
 				b.d.ForeignKey(item.FK),
 			)
 
-			if _, err := b.db.Exec(sql); err != nil {
-				return err
+			if _, err := b.db.Exec(query); err != nil {
+				return fmt.Errorf("schema: add FK %q on %q: %w", name, item.Table, err)
 			}
 		}
 	}
@@ -84,6 +94,19 @@ func (b *Builder) CreateSchema(models ...any) error {
 	return b.CreateIndexes(allIndexes...)
 }
 
+// DropSchema drops all tables that were created by this Builder instance,
+// in reverse order to respect foreign key constraints.
+func (b *Builder) DropSchema() error {
+	for i := len(b.tables) - 1; i >= 0; i-- {
+		query := fmt.Sprintf("DROP TABLE IF EXISTS %s;", b.tables[i])
+		if _, err := b.db.Exec(query); err != nil {
+			return fmt.Errorf("schema: drop table %q: %w", b.tables[i], err)
+		}
+	}
+	return nil
+}
+
+// CreateIndexes creates all provided indexes, skipping existing ones.
 func (b *Builder) CreateIndexes(indexes ...Index) error {
 	for _, index := range indexes {
 		unique := ""
@@ -91,16 +114,76 @@ func (b *Builder) CreateIndexes(indexes ...Index) error {
 			unique = "UNIQUE "
 		}
 
-		sql := fmt.Sprintf(
+		query := fmt.Sprintf(
 			"CREATE %sINDEX IF NOT EXISTS %s ON %s (%s);",
-			unique, index.Name, index.Table,
+			unique,
+			index.Name,
+			index.Table,
 			strings.Join(index.Columns, ", "),
 		)
 
-		if _, err := b.db.Exec(sql); err != nil {
+		if _, err := b.db.Exec(query); err != nil {
+			return fmt.Errorf("schema: create index %q on %q: %w", index.Name, index.Table, err)
+		}
+	}
+	return nil
+}
+
+// ValidateModels validates all models before schema creation.
+// Returns an error describing the first problem found.
+func ValidateModels(models ...any) error {
+	for _, model := range models {
+		if err := validateModel(model); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func validateModel(model any) error {
+	t := reflect.TypeOf(model)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	if t.Kind() != reflect.Struct {
+		return fmt.Errorf("schema: %s is not a struct", t.Name())
+	}
+
+	hasPK := false
+
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := f.Tag.Get("db")
+		if tag == "" || tag == "-" {
+			continue
+		}
+
+		info := parseTag(tag)
+
+		if info.PK {
+			hasPK = true
+			// primary key must declare how its value is generated
+			if !info.Auto && !info.UUID {
+				return fmt.Errorf(
+					"schema: %s.%s is primary_key but missing 'auto' or 'uuid' — add one to declare how the ID is generated",
+					t.Name(), f.Name,
+				)
+			}
+		}
+
+		if info.RefTable != "" && info.RefColumn == "" {
+			return fmt.Errorf(
+				"schema: %s.%s has references:%s but missing column — use references:%s(column)",
+				t.Name(), f.Name, info.RefTable, info.RefTable,
+			)
+		}
+	}
+
+	if !hasPK {
+		return fmt.Errorf("schema: %s has no primary_key field", t.Name())
+	}
+
 	return nil
 }
 
@@ -128,16 +211,13 @@ func parseModel(model any) (string, []Column, []ForeignKey, []Index) {
 			continue
 		}
 
-		colType := goType(f.Type)
-
 		colDef := ColumnDef{
-			Type:       colType,
+			Type:       goType(f.Type),
 			PrimaryKey: info.PK,
 			Auto:       info.Auto,
 			UUID:       info.UUID,
 			NotNull:    info.NotNull,
 			Unique:     info.Unique,
-			Default:    defaultSQL(info.Default, colType),
 		}
 
 		cols = append(cols, Column{Name: info.Name, Def: colDef})
@@ -169,6 +249,9 @@ func parseModel(model any) (string, []Column, []ForeignKey, []Index) {
 	return table, cols, fks, indexes
 }
 
+// parseTag reads all options from a db struct tag.
+// Options unknown to schema-builder (default:, oncreate, onwrite) are
+// silently ignored — they are consumed by crud-depot.
 func parseTag(tag string) tagInfo {
 	if tag == "-" {
 		return tagInfo{Skip: true}
@@ -194,8 +277,6 @@ func parseTag(tag string) tagInfo {
 		case strings.HasPrefix(p, "index:"):
 			info.Index = true
 			info.IndexName = strings.TrimPrefix(p, "index:")
-		case strings.HasPrefix(p, "default:"):
-			info.Default = strings.TrimPrefix(p, "default:")
 		case strings.HasPrefix(p, "references:"):
 			ref := strings.Trim(strings.TrimPrefix(p, "references:"), "()")
 			r := strings.Split(ref, "(")
@@ -207,6 +288,8 @@ func parseTag(tag string) tagInfo {
 			info.OnDelete = strings.ToUpper(strings.TrimPrefix(p, "on_delete:"))
 		case strings.HasPrefix(p, "on_update:"):
 			info.OnUpdate = strings.ToUpper(strings.TrimPrefix(p, "on_update:"))
+			// silently ignored — consumed by crud-depot:
+			// default:, oncreate, onwrite
 		}
 	}
 
@@ -239,19 +322,6 @@ func goType(t reflect.Type) string {
 	}
 }
 
-func defaultSQL(raw, typ string) string {
-	if raw == "" {
-		return ""
-	}
-	if typ == "time" && strings.EqualFold(raw, "current_timestamp") {
-		return "CURRENT_TIMESTAMP"
-	}
-	if typ == "string" {
-		return "'" + strings.ReplaceAll(raw, "'", "''") + "'"
-	}
-	return raw
-}
-
 func snake(s string) string {
 	if s == "" {
 		return ""
@@ -275,41 +345,13 @@ func snake(s string) string {
 }
 
 func resolveTableName(model any) string {
-	if tableName, ok := model.(TableNamer); ok {
-		return tableName.TableName()
+	if tn, ok := model.(TableNamer); ok {
+		return tn.TableName()
 	}
 
-	table := reflect.TypeOf(model)
-	if table.Kind() == reflect.Ptr {
-		table = table.Elem()
+	t := reflect.TypeOf(model)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
 	}
-
-	return snake(table.Name()) + "s"
-}
-
-func ValidateModels(models ...any) error {
-	for _, model := range models {
-		t := reflect.TypeOf(model)
-		if t.Kind() == reflect.Ptr {
-			t = t.Elem()
-		}
-
-		if t.Kind() != reflect.Struct {
-			return fmt.Errorf("%s is not a struct", t.Name())
-		}
-
-		for i := 0; i < t.NumField(); i++ {
-			f := t.Field(i)
-			tag := f.Tag.Get("db")
-			if tag == "" {
-				return fmt.Errorf("model %s field %s missing db tag", t.Name(), f.Name)
-			}
-
-			info := parseTag(tag)
-			if info.RefTable != "" && info.RefColumn == "" {
-				return fmt.Errorf("invalid reference in %s.%s", t.Name(), f.Name)
-			}
-		}
-	}
-	return nil
+	return snake(t.Name()) + "s"
 }

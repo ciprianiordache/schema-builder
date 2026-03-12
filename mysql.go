@@ -5,18 +5,14 @@ import "fmt"
 type MySQL struct{}
 
 func (MySQL) Column(c ColumnDef) string {
-	// AUTO_INCREMENT integer PK
 	if c.PrimaryKey && c.Auto {
 		return "BIGINT PRIMARY KEY AUTO_INCREMENT"
 	}
-
-	// UUID — MySQL 8.0+ supports UUID() as default via expression
 	if c.PrimaryKey && c.UUID {
-		return "VARCHAR(36) PRIMARY KEY DEFAULT (UUID())"
+		return "VARCHAR(36) PRIMARY KEY"
 	}
 
-	sql := ""
-
+	var sql string
 	switch c.Type {
 	case "int":
 		sql = "INT"
@@ -41,9 +37,6 @@ func (MySQL) Column(c ColumnDef) string {
 	if c.Unique {
 		sql += " UNIQUE"
 	}
-	if c.Default != "" {
-		sql += " DEFAULT " + c.Default
-	}
 
 	return sql
 }
@@ -51,33 +44,29 @@ func (MySQL) Column(c ColumnDef) string {
 func (MySQL) SupportsAlterFK() bool { return true }
 
 func (MySQL) ForeignKey(fk ForeignKey) string {
-	name := fmt.Sprintf("CONSTRAINT fk_%s_%s", fk.RefTable, fk.Column)
-
 	sql := fmt.Sprintf(
-		"%s FOREIGN KEY (%s) REFERENCES %s(%s)",
-		name, fk.Column, fk.RefTable, fk.RefColumn,
+		"CONSTRAINT fk_%s_%s FOREIGN KEY (%s) REFERENCES %s(%s)",
+		fk.RefTable, fk.Column,
+		fk.Column, fk.RefTable, fk.RefColumn,
 	)
-
 	if fk.OnDelete != "" {
 		sql += " ON DELETE " + fk.OnDelete
 	}
 	if fk.OnUpdate != "" {
 		sql += " ON UPDATE " + fk.OnUpdate
 	}
-
 	return sql
 }
 
 func (MySQL) ForeignKeyExists(db DB, table, constraint string) (bool, error) {
 	var count int
-	query := `
-	SELECT COUNT(*)
-	FROM information_schema.table_constraints
-	WHERE constraint_type = 'FOREIGN KEY'
-	  AND table_name = ?
-	  AND constraint_name = ?
-	  AND table_schema = DATABASE()
-	`
-	err := db.QueryRow(query, table, constraint).Scan(&count)
+	err := db.QueryRow(`
+		SELECT COUNT(*) FROM information_schema.table_constraints
+		WHERE constraint_type = 'FOREIGN KEY'
+		  AND table_name = ?
+		  AND constraint_name = ?
+		  AND table_schema = DATABASE()`,
+		table, constraint,
+	).Scan(&count)
 	return count > 0, err
 }

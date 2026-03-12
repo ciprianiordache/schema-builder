@@ -12,11 +12,7 @@ type Dialect interface {
 	Column(def ColumnDef) string
 	ForeignKey(fk ForeignKey) string
 	SupportsAlterFK() bool
-	ForeignKeyExists(
-		db DB,
-		table string,
-		constraint string,
-	) (bool, error)
+	ForeignKeyExists(db DB, table string, constraint string) (bool, error)
 }
 
 type TableNamer interface {

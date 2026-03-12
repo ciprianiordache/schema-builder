@@ -15,7 +15,4 @@ func TestParseTag(t *testing.T) {
 	if !info.Index || info.IndexName != "custom_idx" {
 		t.Fatal("index not parsed")
 	}
-	if info.Default != "10" {
-		t.Fatal("default not parsed")
-	}
 }

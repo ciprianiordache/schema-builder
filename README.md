@@ -103,11 +103,11 @@ if err != nil {
 | -------------------------- | --------------------------- |
 | `primary_key`              | Marks column as primary key |
 | `auto`                     | Auto-increment / serial     |
+| `uuid`            		 | Automatic UUID generation   |
 | `notnull`                  | NOT NULL constraint         |
 | `unique`                   | UNIQUE constraint           |
 | `index`                    | Create index                |
 | `index:name`               | Custom index name           |
-| `default:value`            | Default value               |
 | `references:table(column)` | Foreign key                 |
 | `on_delete:cascade`        | ON DELETE action            |
 | `on_update:cascade`        | ON UPDATE action            |

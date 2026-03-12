@@ -5,21 +5,14 @@ import "fmt"
 type SQLite struct{}
 
 func (SQLite) Column(c ColumnDef) string {
-	// SQLite auto-increment ONLY works on INTEGER PRIMARY KEY
 	if c.PrimaryKey && c.Auto {
 		return "INTEGER PRIMARY KEY"
 	}
-
-	// SQLite has no native UUID function — store as TEXT,
-	// application or trigger must set the value.
-	// crud-depot will skip it on INSERT (autoGen=true) so the
-	// caller must supply a default via a trigger or similar.
 	if c.PrimaryKey && c.UUID {
 		return "TEXT PRIMARY KEY"
 	}
 
-	sql := ""
-
+	var sql string
 	switch c.Type {
 	case "int", "bigint":
 		sql = "INTEGER"
@@ -42,9 +35,6 @@ func (SQLite) Column(c ColumnDef) string {
 	if c.Unique {
 		sql += " UNIQUE"
 	}
-	if c.Default != "" {
-		sql += " DEFAULT " + c.Default
-	}
 
 	return sql
 }
@@ -56,14 +46,12 @@ func (SQLite) ForeignKey(fk ForeignKey) string {
 		"FOREIGN KEY (%s) REFERENCES %s(%s)",
 		fk.Column, fk.RefTable, fk.RefColumn,
 	)
-
 	if fk.OnDelete != "" {
 		sql += " ON DELETE " + fk.OnDelete
 	}
 	if fk.OnUpdate != "" {
 		sql += " ON UPDATE " + fk.OnUpdate
 	}
-
 	return sql
 }
 

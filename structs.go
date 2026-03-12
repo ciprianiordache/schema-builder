@@ -1,8 +1,10 @@
 package schema
 
+// Builder is the main entry point for schema operations.
 type Builder struct {
-	db DB
-	d  Dialect
+	db     DB
+	d      Dialect
+	tables []string // tracks creation order for DropSchema
 }
 
 type Column struct {
@@ -10,14 +12,15 @@ type Column struct {
 	Def  ColumnDef
 }
 
+// ColumnDef describes the SQL definition of a column.
+// Default values are intentionally absent — handled by crud-depot at runtime.
 type ColumnDef struct {
 	Type       string
 	PrimaryKey bool
 	Auto       bool // SERIAL / AUTO_INCREMENT — integer auto-increment
-	UUID       bool // gen_random_uuid() / UUID() — secure random string PK
+	UUID       bool // TEXT PRIMARY KEY — secure random string, value set by application
 	NotNull    bool
 	Unique     bool
-	Default    string
 }
 
 type ForeignKey struct {
@@ -35,6 +38,10 @@ type Index struct {
 	Unique  bool
 }
 
+// tagInfo holds all parsed options from a db struct tag.
+// Fields like Default, OnCreate, OnWrite are parsed but ignored by
+// schema-builder — they exist so parseTag doesn't need to know
+// which tool consumes which options.
 type tagInfo struct {
 	Name      string
 	PK        bool
@@ -47,7 +54,6 @@ type tagInfo struct {
 	RefColumn string
 	OnDelete  string
 	OnUpdate  string
-	Default   string
 	Index     bool
 	IndexName string
 }
