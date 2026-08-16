@@ -41,7 +41,7 @@ func (b *Builder) CreateSchema(models ...any) error {
 		defs := make([]string, 0, len(cols)+len(fks))
 		for _, col := range cols {
 			defs = append(defs,
-				fmt.Sprintf("%s %s", col.Name, b.d.Column(col.Def)),
+				fmt.Sprintf("%q %s", col.Name, b.d.Column(col.Def)),
 			)
 		}
 
