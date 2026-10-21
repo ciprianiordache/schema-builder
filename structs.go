@@ -39,21 +39,24 @@ type Index struct {
 }
 
 // tagInfo holds all parsed options from a db struct tag.
-// Fields like Default, OnCreate, OnWrite are parsed but ignored by
-// schema-builder — they exist so parseTag doesn't need to know
-// which tool consumes which options.
+// Default, OnCreate and OnWrite are ignored by CreateSchema (crud-depot
+// applies them at runtime); a Definition renders them as column DEFAULTs.
 type tagInfo struct {
-	Name      string
-	PK        bool
-	Auto      bool
-	UUID      bool
-	NotNull   bool
-	Unique    bool
-	Skip      bool
-	RefTable  string
-	RefColumn string
-	OnDelete  string
-	OnUpdate  string
-	Index     bool
-	IndexName string
+	Name       string
+	PK         bool
+	Auto       bool
+	UUID       bool
+	NotNull    bool
+	Unique     bool
+	Skip       bool
+	RefTable   string
+	RefColumn  string
+	OnDelete   string
+	OnUpdate   string
+	Index      bool
+	IndexName  string
+	Default    string
+	HasDefault bool
+	OnCreate   bool
+	OnWrite    bool
 }

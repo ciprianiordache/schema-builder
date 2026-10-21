@@ -14,7 +14,7 @@ func TestValidateModels_Error(t *testing.T) {
 }
 
 type ValidModel struct {
-	ID int `db:"id,primary_key"`
+	ID int `db:"id,primary_key,auto"`
 }
 
 func TestValidateModels_OK(t *testing.T) {

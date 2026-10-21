@@ -249,9 +249,9 @@ func parseModel(model any) (string, []Column, []ForeignKey, []Index) {
 	return table, cols, fks, indexes
 }
 
-// parseTag reads all options from a db struct tag.
-// Options unknown to schema-builder (default:, oncreate, onwrite) are
-// silently ignored — they are consumed by crud-depot.
+// parseTag reads all options from a db struct tag. default:, oncreate and
+// onwrite are shared with crud-depot: CreateSchema ignores them, a
+// Definition turns them into column DEFAULTs.
 func parseTag(tag string) tagInfo {
 	if tag == "-" {
 		return tagInfo{Skip: true}
@@ -274,6 +274,13 @@ func parseTag(tag string) tagInfo {
 			info.Unique = true
 		case p == "index":
 			info.Index = true
+		case p == "oncreate":
+			info.OnCreate = true
+		case p == "onwrite":
+			info.OnWrite = true
+		case strings.HasPrefix(p, "default:"):
+			info.Default = strings.TrimPrefix(p, "default:")
+			info.HasDefault = true
 		case strings.HasPrefix(p, "index:"):
 			info.Index = true
 			info.IndexName = strings.TrimPrefix(p, "index:")
@@ -288,8 +295,6 @@ func parseTag(tag string) tagInfo {
 			info.OnDelete = strings.ToUpper(strings.TrimPrefix(p, "on_delete:"))
 		case strings.HasPrefix(p, "on_update:"):
 			info.OnUpdate = strings.ToUpper(strings.TrimPrefix(p, "on_update:"))
-			// silently ignored — consumed by crud-depot:
-			// default:, oncreate, onwrite
 		}
 	}
 

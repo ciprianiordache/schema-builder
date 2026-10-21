@@ -6,10 +6,11 @@
 A minimal, deterministic SQL schema builder for Go.
 
 - ❌ Not an ORM
-- ❌ No migrations engine
-- ❌ No schema diffing
-- ❌ No default values — handled by [crud-depot](https://github.com/ciprianiordache/crud-depot)
-- ✅ Idempotent
+- ✅ Idempotent `CreateSchema` for PostgreSQL, MySQL and SQLite
+- ✅ PostgreSQL migrations generated from your models — composite keys,
+  CHECKs, partial indexes, generated columns — reviewed as plain SQL files
+  ([PostgreSQL migrations](#postgresql-migrations))
+- ✅ A drift check that fails a test when the models and the database disagree
 - ✅ Explicit
 - ✅ Fast — no runtime overhead
 
@@ -49,8 +50,9 @@ It does **not**:
 - drop constraints
 - infer schema differences
 
-Default values (`default:`, `oncreate`, `onwrite`) are intentionally ignored by schema-builder.
-They are part of the shared `db` tag contract but consumed exclusively by crud-depot at runtime.
+Default values (`default:`, `oncreate`, `onwrite`) are intentionally ignored by `CreateSchema`.
+They are part of the shared `db` tag contract and applied by crud-depot at runtime.
+A PostgreSQL `Definition` (below) also renders them as column `DEFAULT`s.
 
 ---
 
@@ -320,13 +322,119 @@ ALTER TABLE orders ADD CONSTRAINT fk_users_user_id FOREIGN KEY (user_id) REFEREN
 
 ---
 
+## PostgreSQL migrations
+
+For an application whose data must survive schema changes, `CreateSchema`
+is not enough. A `Definition` describes the full PostgreSQL schema — each
+table is a model plus what a tag cannot say — and drives three tools:
+
+| Function | What it does |
+| --- | --- |
+| `Generate(ctx, db, def, dir, name)` | Writes the next `NNNN_name.up.sql` / `.down.sql` into `dir`: the SQL that takes the existing migrations to the models |
+| `Verify(ctx, db, def)` | Returns a `*DriftError` listing every difference between the database and the models; put it in a test |
+| `Migrate` / `Rollback` | Apply or undo migrations: advisory lock, one transaction per file, `schema_migrations` bookkeeping |
+
+### Describe the schema
+
+```go
+var def = schema.Define(
+    schema.Options{IDType: "uuid", Extensions: []string{"citext"}},
+
+    schema.Model(model.Organization{}, func(t *schema.Table) {
+        t.Col("name").Check(`btrim(name) <> ''`)
+        t.Col("currency").Type("char(3)").Check(`currency ~ '^[A-Z]{3}$'`)
+    }),
+    schema.Model(model.Unit{}, func(t *schema.Table) {
+        t.Col("organization_id").References("organizations", "id").OnDelete("cascade")
+        t.Col("notes").Default("''")
+        t.Unique("organization_id", "id")
+        t.ForeignKey("organization_id", "grade_id").References("grades", "organization_id", "id")
+        t.Check("status NOT IN ('listed', 'sold') OR grade_id IS NOT NULL")
+        t.Index("units_serial_uq", "organization_id", "serial").Unique().Where("serial IS NOT NULL")
+        t.Index("units_date_idx", "organization_id", "created_at DESC")
+    }),
+    schema.Model(model.Intervention{}, func(t *schema.Table) {
+        // no field in the model: Postgres computes it
+        t.Generated("labor_cost", "bigint", "(minutes * labor_rate_per_hour + 30) / 60")
+    }),
+    schema.Model(model.PartUse{}, func(t *schema.Table) {
+        t.PrimaryKey("intervention_id", "part_id")
+    }),
+)
+```
+
+Types come from Go: `string` → `text` (or `Options.IDType` for `id` and
+`*_id` columns), `int16` → `smallint`, `int32` → `integer`, `int`/`int64` →
+`bigint`, `bool` → `boolean`, `float64` → `double precision`, `time.Time` →
+`timestamptz`, `[]byte` → `bytea`; a pointer is the same type, nullable.
+`Type` overrides it. From the tags: `default:X` becomes `DEFAULT 'X'`
+(unquoted for numbers and booleans), `oncreate` / `onwrite` become
+`DEFAULT now() NOT NULL`, `primary_key,uuid` becomes
+`DEFAULT gen_random_uuid()` when `IDType` is `uuid`, and
+`primary_key,auto` becomes `GENERATED ALWAYS AS IDENTITY`.
+
+Postgres names the constraints as it would for hand-written SQL
+(`units_pkey`, `units_organization_id_id_key`, `units_status_check`,
+`units_check`, `units_organization_id_grade_id_fkey`), so code that matches
+on a constraint name keeps working.
+
+### Generate a migration
+
+```go
+up, down, err := schema.Generate(ctx, db, def, "migrations", "add_warranty")
+if errors.Is(err, schema.ErrNoChanges) { /* nothing to do */ }
+```
+
+`Generate` replays the existing migrations and builds the models, each in a
+scratch schema inside a transaction that is always rolled back, then asks
+PostgreSQL for both catalogs and writes the difference. No SQL is parsed:
+Postgres has already normalised every type, default, CHECK and foreign key
+into the same text on both sides. Any PostgreSQL database works; nothing in
+it changes.
+
+```sql
+-- 0002_add_warranty.up.sql
+ALTER TABLE sales ADD COLUMN warranty_months smallint DEFAULT 12 NOT NULL;
+ALTER TABLE sales ADD CONSTRAINT sales_warranty_months_check CHECK ((warranty_months >= 0));
+```
+
+Review the files before committing them: a rename shows up as a drop plus
+an add, and a table no model describes is only listed, commented out.
+Functions, triggers and views are not modelled; write them by hand below
+the generated statements (and drop them above, in the down file).
+
+### Fail a test on drift
+
+```go
+func TestMigrationsMatchModels(t *testing.T) {
+    db := testDB(t) // a database with every migration applied
+    if err := schema.Verify(ctx, db, def); err != nil {
+        t.Fatal(err) // lists the SQL the database is missing
+    }
+}
+```
+
+### Apply
+
+```go
+applied, err := schema.Migrate(ctx, db, migrations.FS) // embed.FS of *.sql
+rolled, err := schema.Rollback(ctx, db, migrations.FS, 1)
+```
+
+Files follow golang-migrate's naming (`0001_init.up.sql` /
+`0001_init.down.sql`); a version without both files is an error.
+
+---
+
 ## Recommended Usage
 
 - Run `ValidateModels` at startup before `CreateSchema`
 - Pass models in dependency order — no foreign keys first
 - Use `DropSchema` in tests to reset state between runs
-- Treat this as **database-first**, not migrations-first
-- For complex schema changes, write migrations manually
+- `CreateSchema` is **database-first**: fine for tests, prototypes and SQLite
+  apps that start from scratch
+- For data that must survive schema changes, use a PostgreSQL `Definition`
+  with `Generate` / `Verify` / `Migrate`
 
 ---
 
@@ -349,13 +457,16 @@ id, err := depot.Create(&model.User{Name: "Ion"})
 ## FAQ
 
 **Does it drop or modify columns?**
-No. It only creates missing tables, indexes, and foreign keys.
+`CreateSchema` does not: it only creates missing tables, indexes and foreign keys.
+`Generate` writes the `ALTER` statements into a migration file for you to review.
 
 **Can I use it as a full migration tool?**
-No. It is deterministic and database-first. For migrations, use a dedicated tool like `golang-migrate`.
+On PostgreSQL, yes: `Generate` writes the migrations, `Migrate` / `Rollback` apply them,
+`Verify` catches drift. The files are golang-migrate compatible if you prefer that runner.
 
-**Why are there no DEFAULT clauses in the generated SQL?**
-Default values are a runtime concern — handled by crud-depot when building INSERT queries. schema-builder only defines structure.
+**Why are there no DEFAULT clauses in the `CreateSchema` SQL?**
+Default values are a runtime concern there — handled by crud-depot when building INSERT queries.
+A PostgreSQL `Definition` does render them, so raw SQL inserts get the same values.
 
 **What happens if I forget `auto` or `uuid` on a primary key?**
 `CreateSchema` and `ValidateModels` both return a clear error:

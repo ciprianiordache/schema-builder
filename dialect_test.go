@@ -31,7 +31,7 @@ func TestMySQLAutoIncrement(t *testing.T) {
 		Auto:       true,
 	})
 
-	if sql != "INT PRIMARY KEY AUTO_INCREMENT" {
+	if sql != "BIGINT PRIMARY KEY AUTO_INCREMENT" {
 		t.Fatal(sql)
 	}
 }
